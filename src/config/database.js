@@ -2,10 +2,14 @@ import { Low } from 'lowdb';
 import { JSONFile } from 'lowdb/node';
 import path from 'path';
 import fs from 'fs';
+import { fileURLToPath } from 'url';
 
-// --- CONFIGURATION ---
-// Use process.cwd() to ensure we are relative to the project root in Railway's /app directory
-const DATA_DIR = path.join(process.cwd(), 'data');
+// 1. Get absolute root directory accurately
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+// Assuming this file is in /src/config/database.js, root is two levels up
+const ROOT_DIR = path.resolve(__dirname, '../../');
+const DATA_DIR = path.join(ROOT_DIR, 'data');
 const DB_FILE = path.join(DATA_DIR, 'db.json');
 
 const defaultData = {
@@ -15,72 +19,82 @@ const defaultData = {
   paymentRequests: []
 };
 
-// --- DIRECTORY INITIALIZATION ---
-// Task 1: Ensure required directories are created at runtime
+// 2. Ultra-robust directory creation at the very top level
+console.log(`🔍 System: Initializing filesystem at ${DATA_DIR}`);
 try {
+  // Ensure we have an absolute path and create recursively
   if (!fs.existsSync(DATA_DIR)) {
-    fs.mkdirSync(DATA_DIR, { recursive: true });
-    console.log(`📁 Production: Created directory at ${DATA_DIR}`);
+    console.log('📂 Directory missing, creating...');
+    fs.mkdirSync(DATA_DIR, { recursive: true, mode: 0o777 });
+    console.log('✅ Directory created successfully');
+  } else {
+    console.log('✅ Directory already exists');
   }
+  
+  // Test write permissions immediately
+  const testFile = path.join(DATA_DIR, '.write_test');
+  fs.writeFileSync(testFile, 'test');
+  fs.unlinkSync(testFile);
+  console.log('✅ Filesystem is writable');
 } catch (error) {
-  console.error('❌ Critical: Failed to create data directory:', error);
+  console.error('❌ CRITICAL FILESYSTEM ERROR:', error.message);
+  // We don't throw here to allow the app to try starting with in-memory fallback
 }
 
-// --- LOWDB SETUP ---
-// Task 3: Improve lowdb / JSON storage logic
+// 3. Initialize LowDB
 const adapter = new JSONFile(DB_FILE);
 const db = new Low(adapter, defaultData);
 
-/**
- * Task 1 & 3: Ensure database is ready for production.
- * Handles missing files and directory structure automatically.
- */
 export async function initDatabase() {
   try {
-    // Task 5: Fallback handling
+    console.log('📖 Reading database file...');
     await db.read();
     
     if (!db.data) {
-      console.log('📝 First run: Initializing database with default schema...');
+      console.log('🆕 Database file not found or empty. Initializing with defaults...');
       db.data = defaultData;
+      
+      // Double check directory before writing
+      if (!fs.existsSync(DATA_DIR)) {
+        fs.mkdirSync(DATA_DIR, { recursive: true });
+      }
+      
       await db.write();
+      console.log('✅ Database file created');
+    } else {
+      console.log('✅ Database loaded: %d users found', db.data.users?.length || 0);
     }
-    
-    console.log('✅ Production: Database initialized and loaded');
   } catch (error) {
-    console.error('❌ Database Initialization Error:', error.message);
-    // Fallback: keep app running with in-memory data if filesystem fails
+    console.error('❌ Database Load Error:', error.message);
     db.data = defaultData;
-    console.log('⚠️ Fallback: App running with in-memory database only');
+    console.log('⚠️ Using in-memory fallback database');
   }
 }
 
-// --- UTILITY WRAPPERS ---
-// Task 2: Add safe file handling
+// 4. Safe Wrappers for runtime operations
 async function safeRead() {
   try {
     await db.read();
-    db.data ||= defaultData;
+    if (!db.data) db.data = defaultData;
   } catch (error) {
-    console.error('❌ Error reading from database:', error.message);
+    console.error('❌ DB Read Error:', error.message);
   }
 }
 
 async function safeWrite() {
   try {
-    // Task 1: Ensure directory exists before writing
+    // One last check for directory before any write
     if (!fs.existsSync(DATA_DIR)) {
       fs.mkdirSync(DATA_DIR, { recursive: true });
     }
     await db.write();
   } catch (error) {
-    console.error('❌ Error writing to database:', error.message);
-    // Task 5: Keep app running even if write fails
+    console.error('❌ DB Write Error:', error.message);
+    // If it fails, we keep going in memory
   }
 }
 
-// --- DATA OPERATIONS ---
-
+// 5. Data Operations
 export async function addUser(user) {
   await safeRead();
   const existingIndex = db.data.users.findIndex(u => u.id === user.id);
@@ -112,12 +126,12 @@ export async function getUser(userId) {
 
 export async function getAllUsers() {
   await safeRead();
-  return db.data.users;
+  return db.data.users || [];
 }
 
 export async function getUsersCount() {
   await safeRead();
-  return db.data.users.length;
+  return db.data.users?.length || 0;
 }
 
 export async function addOrder(order) {
@@ -133,7 +147,7 @@ export async function addOrder(order) {
 
 export async function getOrders() {
   await safeRead();
-  return db.data.orders;
+  return db.data.orders || [];
 }
 
 export async function addReview(review) {
@@ -148,7 +162,7 @@ export async function addReview(review) {
 
 export async function getReviews(limit = 10) {
   await safeRead();
-  return db.data.reviews.slice(-limit).reverse();
+  return (db.data.reviews || []).slice(-limit).reverse();
 }
 
 export async function updateUserBalance(userId, amount) {
@@ -182,7 +196,7 @@ export async function addPaymentRequest(request) {
 
 export async function getPaymentRequests() {
   await safeRead();
-  return db.data.paymentRequests;
+  return db.data.paymentRequests || [];
 }
 
 export async function updatePaymentRequestStatus(requestId, status) {
