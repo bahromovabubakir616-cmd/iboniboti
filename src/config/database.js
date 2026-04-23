@@ -2,12 +2,16 @@ import { Low } from 'lowdb';
 import { JSONFile } from 'lowdb/node';
 import path from 'path';
 import fs from 'fs';
+import { fileURLToPath } from 'url';
 
-// 1. Simplified Path: Use root directory directly for db.json
-// This avoids the "no such directory" error for 'data' folder
-const DB_FILE = path.resolve(process.cwd(), 'db.json');
+// 1. Manzillarni aniqlash
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
-console.log(`🚀 DEBUG: Database file path: ${DB_FILE}`);
+// /src/config/dan 2 pog'ona yuqoriga chiqib, /data/ papkasini topamiz
+const ROOT_DIR = path.resolve(__dirname, '../../');
+const DATA_DIR = path.join(ROOT_DIR, 'data');
+const DB_FILE = path.join(DATA_DIR, 'db.json');
 
 const defaultData = {
   users: [],
@@ -16,60 +20,79 @@ const defaultData = {
   paymentRequests: []
 };
 
-// 2. Immediate Setup
+// 2. Papkani tekshirish va yaratish funksiyasi
+const ensureDirectoryExists = () => {
+  try {
+    if (!fs.existsSync(DATA_DIR)) {
+      fs.mkdirSync(DATA_DIR, { recursive: true, mode: 0o777 });
+      console.log(`📁 Papka yaratildi: ${DATA_DIR}`);
+    }
+  } catch (err) {
+    console.error('❌ Papka yaratishda xato:', err.message);
+  }
+};
+
+// Birinchi marta ishga tushganda tekshiramiz
+ensureDirectoryExists();
+
+// 3. LowDB sozlamalari
 const adapter = new JSONFile(DB_FILE);
 const db = new Low(adapter, defaultData);
 
 export async function initDatabase() {
   try {
-    console.log('📖 DEBUG: Reading database...');
+    ensureDirectoryExists();
+    console.log('📖 Baza o\'qilmoqda...');
     await db.read();
     
     if (!db.data) {
-      console.log('📝 DEBUG: Initializing default data...');
+      console.log('📝 Yangi baza fayli yaratilmoqda...');
       db.data = defaultData;
       await db.write();
-      console.log('✅ DEBUG: Database created at root');
-    } else {
-      console.log('✅ DEBUG: Database loaded successfully');
     }
+    console.log('✅ Baza muvaffaqiyatli yuklandi');
   } catch (error) {
-    console.error('❌ DEBUG: Init Error:', error.message);
-    db.data = defaultData;
+    console.error('❌ Baza yuklashda xato:', error.message);
+    db.data = defaultData; // Xato bo'lsa xotiradagi bo'sh baza bilan ishlayveradi
   }
 }
 
-// Safe Wrappers
+// 4. Xavfsiz o'qish va yozish funksiyalari
 async function safeRead() {
   try {
     await db.read();
     if (!db.data) db.data = defaultData;
   } catch (error) {
-    console.error('❌ DB Read Error:', error.message);
+    console.error('❌ O\'qishda xato:', error.message);
   }
 }
 
 async function safeWrite() {
   try {
+    // Har safar yozishdan oldin papka borligiga ishonch hosil qilamiz
+    ensureDirectoryExists();
     await db.write();
   } catch (error) {
-    console.error('❌ DB Write Error:', error.message);
+    console.error('❌ Yozishda xato:', error.message);
+    // Crash bo'lmasligi uchun xatoni ushlab qolamiz
   }
 }
 
-// Data Operations
+// --- DATA OPERATIONS ---
+
 export async function addUser(user) {
   await safeRead();
-  const existingIndex = (db.data.users || []).findIndex(u => u.id === user.id);
+  const users = db.data.users || [];
+  const existingIndex = users.findIndex(u => u.id === user.id);
   
   if (existingIndex >= 0) {
-    db.data.users[existingIndex] = { 
-      ...db.data.users[existingIndex], 
+    users[existingIndex] = { 
+      ...users[existingIndex], 
       ...user,
-      balance: db.data.users[existingIndex].balance || 0
+      balance: users[existingIndex].balance || 0
     };
   } else {
-    db.data.users.push({
+    users.push({
       id: user.id,
       username: user.username,
       firstName: user.first_name,
@@ -78,6 +101,7 @@ export async function addUser(user) {
       joinedAt: new Date().toISOString()
     });
   }
+  db.data.users = users;
   await safeWrite();
 }
 
@@ -93,12 +117,12 @@ export async function getAllUsers() {
 
 export async function getUsersCount() {
   await safeRead();
-  return db.data.users?.length || 0;
+  return (db.data.users || []).length;
 }
 
 export async function addOrder(order) {
   await safeRead();
-  db.data.orders ||= [];
+  db.data.orders = db.data.orders || [];
   db.data.orders.push({
     id: Date.now(),
     ...order,
@@ -115,7 +139,7 @@ export async function getOrders() {
 
 export async function addReview(review) {
   await safeRead();
-  db.data.reviews ||= [];
+  db.data.reviews = db.data.reviews || [];
   db.data.reviews.push({
     id: Date.now(),
     ...review,
@@ -131,12 +155,14 @@ export async function getReviews(limit = 10) {
 
 export async function updateUserBalance(userId, amount) {
   await safeRead();
-  const userIndex = (db.data.users || []).findIndex(u => u.id === userId);
+  const users = db.data.users || [];
+  const userIndex = users.findIndex(u => u.id === userId);
   
   if (userIndex >= 0) {
-    db.data.users[userIndex].balance = (db.data.users[userIndex].balance || 0) + amount;
+    users[userIndex].balance = (users[userIndex].balance || 0) + amount;
+    db.data.users = users;
     await safeWrite();
-    return db.data.users[userIndex].balance;
+    return users[userIndex].balance;
   }
   return null;
 }
@@ -148,7 +174,7 @@ export async function getUserBalance(userId) {
 
 export async function addPaymentRequest(request) {
   await safeRead();
-  db.data.paymentRequests ||= [];
+  db.data.paymentRequests = db.data.paymentRequests || [];
   db.data.paymentRequests.push({
     id: Date.now(),
     ...request,
@@ -165,12 +191,14 @@ export async function getPaymentRequests() {
 
 export async function updatePaymentRequestStatus(requestId, status) {
   await safeRead();
-  const requestIndex = (db.data.paymentRequests || []).findIndex(r => r.id === requestId);
+  const requests = db.data.paymentRequests || [];
+  const requestIndex = requests.findIndex(r => r.id === requestId);
   
   if (requestIndex >= 0) {
-    db.data.paymentRequests[requestIndex].status = status;
+    requests[requestIndex].status = status;
+    db.data.paymentRequests = requests;
     await safeWrite();
-    return db.data.paymentRequests[requestIndex];
+    return requests[requestIndex];
   }
   return null;
 }
