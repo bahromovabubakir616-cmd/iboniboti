@@ -2,7 +2,7 @@ import dotenv from 'dotenv';
 
 dotenv.config();
 
-export const BOT_TOKEN = process.env.BOT_TOKEN;
+export const BOT_TOKEN = process.env.BOT_TOKEN || process.env.Bot_Token;
 
 export const ADMIN_IDS = [
   // Replace with actual admin IDs (numbers, not usernames)
